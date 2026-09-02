@@ -1,0 +1,26 @@
+# Build artifacts
+build/
+*.exe
+
+# Go
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# WPX config (local)
+.wpx/
+
+# Dependencies
+node_modules/
+
+# Local integration-test scratch output
+tests/integration/.tmp/
