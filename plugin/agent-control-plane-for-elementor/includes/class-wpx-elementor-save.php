@@ -181,12 +181,23 @@ class WPX_Elementor_Save {
 
         $before_settings = $before_element['settings'] ?? [];
 
+        // Warn about any key not found in this element's own control schema,
+        // *before* resolve_toggles() below adds its own (legitimate) toggle
+        // keys to $changes - those aren't part of what the caller wrote and
+        // must not be flagged as unknown themselves.
+        $unknown_warnings = $this->unknown_setting_warnings(
+            $changes,
+            $before_element['elType'] ?? 'widget',
+            $before_element['widgetType'] ?? null
+        );
+
         // Add whatever group-control toggles these changes need in order to
         // render. Without them Elementor stores the value and ignores it: a
         // typography_font_size with no typography_typography produces no CSS
         // at all, which is silent and extremely confusing.
         $toggled = $this->resolve_toggles( $changes, $before_element );
         $changes = $toggled['changes'];
+        $warnings = array_merge( $toggled['warnings'], $unknown_warnings );
 
         $modified = $elements;
         if ( ! $this->bridge->update_element_settings( $modified, $element_id, $changes ) ) {
@@ -203,7 +214,7 @@ class WPX_Elementor_Save {
                 'widget_type'  => $before_element['widgetType'] ?? null,
                 'diff'         => $diff,
                 'toggles'      => $toggled['toggles'],
-                'warnings'     => $toggled['warnings'],
+                'warnings'     => $warnings,
             ] );
         }
 
@@ -221,7 +232,7 @@ class WPX_Elementor_Save {
                 'widget_type'  => $before_element['widgetType'] ?? null,
                 'diff'         => $diff,
                 'toggles'      => $toggled['toggles'],
-                'warnings'     => $toggled['warnings'],
+                'warnings'     => $warnings,
                 'message'      => 'Changes applied successfully.',
             ]
         );
@@ -377,10 +388,20 @@ class WPX_Elementor_Save {
             return $classic;
         }
 
+        $type_check = $this->validate_widget_type( $widget_type );
+        if ( null !== $type_check['error'] ) {
+            return $this->error( $type_check['error'] );
+        }
+
         $new_widget = $this->bridge->create_widget( $widget_type, $settings );
+
+        // Same check update_element() makes, against the settings the caller
+        // passed rather than the ones resolve_toggles() derives below.
+        $unknown_warnings = $this->unknown_setting_warnings( $settings, 'widget', $widget_type );
 
         $toggled                  = $this->resolve_toggles( $settings, $new_widget );
         $new_widget['settings']   = $toggled['changes'];
+        $warnings                 = array_merge( $type_check['warnings'], $toggled['warnings'], $unknown_warnings );
 
         // Rehearse the insertion so a dry run reports the truth rather than an
         // optimistic guess. A widget parent, or a missing parent, fails here.
@@ -404,7 +425,7 @@ class WPX_Elementor_Save {
                 'parent_id'   => $parent_id ?? 'root',
                 'settings'    => $new_widget['settings'],
                 'toggles'     => $toggled['toggles'],
-                'warnings'    => $toggled['warnings'],
+                'warnings'    => $warnings,
                 'message'     => "Would add '{$widget_type}' widget.",
             ] );
         }
@@ -421,7 +442,7 @@ class WPX_Elementor_Save {
                 'element_id'  => $new_widget['id'],
                 'widget_type' => $widget_type,
                 'toggles'     => $toggled['toggles'],
-                'warnings'    => $toggled['warnings'],
+                'warnings'    => $warnings,
                 'message'     => "Widget '{$widget_type}' added with ID '{$new_widget['id']}'.",
             ]
         );
@@ -558,15 +579,15 @@ class WPX_Elementor_Save {
             ];
         }
 
-        $elements = json_decode( $snapshot, true );
-        if ( ! is_array( $elements ) ) {
+        $elements = $this->decode_snapshot( $snapshot );
+        if ( null === $elements ) {
             return $this->error( "Snapshot for '{$operation_id}' is not valid Elementor data." );
         }
 
         try {
             $this->persist( $post_id, $elements );
         } catch ( \Throwable $e ) {
-            return $this->error( 'Undo failed: ' . $e->getMessage() );
+            return $this->error( 'Undo failed: ' . $this->diagnose_write_error( $e ) );
         }
 
         WPX_Operation_History::mark_undone( $operation_id );
@@ -1086,6 +1107,97 @@ class WPX_Elementor_Save {
     }
 
     /**
+     * Validate a widget type against Elementor's own widget registry before
+     * accepting it, so `add_widget()` refuses outright rather than silently
+     * persisting a dead element the editor can never render — confirmed on
+     * a live site: `--type=uydurmawidget` was accepted, written into the
+     * page, and even `--dry-run` reported it as something that would be
+     * added.
+     *
+     * Degrades to a warning, not a refusal, when the widgets manager isn't
+     * available: Elementor being present but not fully booted is not proof
+     * the type is bad, only that this check couldn't run.
+     *
+     * @param string $widget_type The widget type to validate.
+     * @return array{error:string|null,warnings:string[]} 'error' is set
+     *         (and the write must be refused) only when the registry was
+     *         actually consulted and came back empty for this type.
+     */
+    private function validate_widget_type( string $widget_type ): array {
+        if (
+            ! class_exists( '\Elementor\Plugin' )
+            || ! did_action( 'elementor/loaded' )
+            || ! isset( \Elementor\Plugin::$instance )
+            || ! isset( \Elementor\Plugin::$instance->widgets_manager )
+        ) {
+            return [
+                'error'    => null,
+                'warnings' => [
+                    "Could not verify widget type '{$widget_type}' against Elementor's registry " .
+                    '(the widgets manager was unavailable); it was written unverified.',
+                ],
+            ];
+        }
+
+        $registered = \Elementor\Plugin::$instance->widgets_manager->get_widget_types( $widget_type );
+
+        if ( null === $registered ) {
+            return [
+                'error'    => "Unknown widget type '{$widget_type}': it is not registered with Elementor and " .
+                    'would be written as a dead element the editor cannot render.',
+                'warnings' => [],
+            ];
+        }
+
+        return [ 'error' => null, 'warnings' => [] ];
+    }
+
+    /**
+     * Warn about settings keys that don't exist in the element's own
+     * Elementor control schema, so a typo or a made-up key (e.g.
+     * `uydurma_ayar`) is surfaced instead of silently accepted - confirmed
+     * on a live site: such a write returned `success: true` with an empty
+     * `warnings` array and showed up in the diff like any normal change.
+     *
+     * Deliberately conservative: WPX_Elementor_Controls::describe_element()
+     * returns an empty schema whenever it can't resolve one (Elementor not
+     * loaded, or - common on this project's install, full of lazily- or
+     * never-registered `pxl_*` theme widgets - the widget type just isn't
+     * resolvable in a WP-CLI context). When that happens this returns no
+     * warnings at all rather than flagging every key: an unreliable warning
+     * on every single write is worse than none.
+     *
+     * @param array       $changes      The settings keys the caller wrote.
+     * @param string      $element_type 'widget', 'container', 'section', 'column', etc.
+     * @param string|null $widget_type  Required alongside $element_type when it's 'widget'.
+     * @return string[] Warning messages, one per unrecognized key.
+     */
+    private function unknown_setting_warnings( array $changes, string $element_type, ?string $widget_type ): array {
+        if ( ! class_exists( 'WPX_Elementor_Controls' ) ) {
+            return [];
+        }
+
+        $schema = WPX_Elementor_Controls::describe_element( $element_type, $widget_type );
+
+        if ( empty( $schema ) ) {
+            return [];
+        }
+
+        $warnings = [];
+
+        foreach ( $changes as $key => $value ) {
+            if ( ! array_key_exists( $key, $schema ) ) {
+                $warnings[] = sprintf(
+                    "Setting '%s' was not found in this element's control schema and may be ignored by Elementor.",
+                    $key
+                );
+            }
+        }
+
+        return $warnings;
+    }
+
+    /**
      * Resolve the group-control toggles a set of changes needs.
      *
      * @param array $changes The settings being written.
@@ -1153,11 +1265,35 @@ class WPX_Elementor_Save {
         try {
             $this->persist( $post_id, $elements );
         } catch ( \Throwable $e ) {
-            WPX_Operation_History::fail( $operation_id, $e->getMessage() );
+            $diagnosis = $this->diagnose_write_error( $e );
+
+            // persist() writes `_elementor_data` FIRST and only then
+            // regenerates CSS, so a throw from the CSS step leaves the new,
+            // unconfirmed data already saved underneath us. Telling the
+            // caller the write "failed" while the page has in fact changed
+            // is the one outcome an agent caller cannot safely act on, so
+            // put the post back the way it was before reporting failure.
+            $rollback_error = $this->rollback_after_failed_write( $post_id, is_string( $snapshot ) ? $snapshot : null );
+
+            if ( null !== $rollback_error ) {
+                WPX_Operation_History::fail( $operation_id, $diagnosis . ' | rollback also failed: ' . $rollback_error );
+
+                return [
+                    'success'      => false,
+                    'operation_id' => $operation_id,
+                    'message'      => 'Write failed: ' . $diagnosis .
+                        ". The page was left in a MODIFIED state — automatic rollback also failed ({$rollback_error}). " .
+                        "Run `wpx elementor undo {$operation_id}` to restore its pre-write state.",
+                ];
+            }
+
+            WPX_Operation_History::fail( $operation_id, $diagnosis );
+
             return [
                 'success'      => false,
                 'operation_id' => $operation_id,
-                'message'      => 'Write failed: ' . $e->getMessage() . " (snapshot kept under {$operation_id}).",
+                'message'      => 'Write failed: ' . $diagnosis .
+                    " (snapshot kept under {$operation_id}; the page has been rolled back to its pre-write state).",
             ];
         }
 
@@ -1201,6 +1337,121 @@ class WPX_Elementor_Save {
         wp_update_post( [ 'ID' => $post_id ] );
 
         WPX_Elementor_Compat::regenerate_post_css( $post_id );
+    }
+
+    /**
+     * Decode a raw pre-write snapshot (as captured by apply() via
+     * get_post_meta(), or retrieved via WPX_Operation_History::get_snapshot())
+     * into an elements array ready to hand to persist(). Shared by undo()
+     * and apply()'s own failure-path rollback, so both validate a snapshot
+     * exactly the same way.
+     *
+     * @param string $snapshot Raw JSON.
+     * @return array|null The decoded elements, or null if the snapshot is
+     *                     not valid Elementor data.
+     */
+    private function decode_snapshot( string $snapshot ): ?array {
+        $elements = json_decode( $snapshot, true );
+
+        return is_array( $elements ) ? $elements : null;
+    }
+
+    /**
+     * Put a post's `_elementor_data` back to its pre-write snapshot after
+     * persist() throws partway through apply(). See the comment at the
+     * apply() call site for why this matters: persist() writes
+     * `_elementor_data` before it regenerates CSS, so a throw from the CSS
+     * step alone leaves the new, unconfirmed data already saved.
+     *
+     * Only `_elementor_data` is reverted here — not the `_elementor_edit_mode`
+     * / `_elementor_version` meta or the `post_modified` bump persist() also
+     * makes. Those either don't change across a wpx write (edit mode,
+     * version) or don't change what the page renders (post_modified);
+     * `_elementor_data` is the only one of persist()'s writes that actually
+     * describes the page's content, so it's the only one whose mismatch
+     * would mean the write didn't really fail.
+     *
+     * CSS is re-synced with the reverted data on a best-effort basis: a
+     * throw there does not leave the page in a modified state — content is
+     * already back to its pre-write value — so it is not treated as a
+     * rollback failure, only swallowed.
+     *
+     * @param int         $post_id  The post ID.
+     * @param string|null $snapshot The pre-write snapshot captured by
+     *                               apply() (unslashed, as get_post_meta()
+     *                               returns it), or null/empty when the post
+     *                               had no `_elementor_data` before the write.
+     * @return string|null Null once the revert is verified in place;
+     *                      otherwise a message describing why the rollback
+     *                      itself failed, so the caller can be told the page
+     *                      is still in a modified state.
+     */
+    private function rollback_after_failed_write( int $post_id, ?string $snapshot ): ?string {
+        if ( null === $snapshot || '' === $snapshot ) {
+            $elements = [];
+        } else {
+            $elements = $this->decode_snapshot( $snapshot );
+
+            if ( null === $elements ) {
+                return 'the pre-write snapshot could not be decoded';
+            }
+        }
+
+        $json = wp_json_encode( $elements );
+
+        if ( false === $json ) {
+            return 'the pre-write snapshot could not be re-encoded';
+        }
+
+        update_post_meta( $post_id, '_elementor_data', wp_slash( $json ) );
+
+        // update_post_meta()'s boolean return is not a reliable success
+        // signal here (it also returns false when the new value equals the
+        // old one), so the revert is verified by reading the meta back
+        // instead of trusting the return value.
+        if ( get_post_meta( $post_id, '_elementor_data', true ) !== $json ) {
+            return 'update_post_meta() could not be verified to have restored the previous _elementor_data';
+        }
+
+        try {
+            WPX_Elementor_Compat::regenerate_post_css( $post_id );
+        } catch ( \Throwable $e ) {
+            // Deliberately ignored - see method doc comment.
+        }
+
+        return null;
+    }
+
+    /**
+     * Recognize Elementor's CSS-regeneration failure when WP_Filesystem has
+     * silently fallen back to the `ftp` method with no credentials
+     * configured, and translate the resulting PHP TypeError into an
+     * actionable message.
+     *
+     * Root cause (confirmed against a real Plesk site): running wpx/WP-CLI
+     * as a different OS user than the one that owns the site's files makes
+     * WP_Filesystem reject the `direct` method and fall back to `ftp`,
+     * whose internal calls then all receive a null connection - e.g.
+     * `ftp_nlist(): Argument #1 ($ftp) must be of type FTP\Connection, null
+     * given`. That raw message gives no hint the real cause is a system-user
+     * mismatch rather than a filesystem or FTP configuration problem, so it
+     * is translated here rather than left for the caller to puzzle out. The
+     * original message is always kept, never hidden.
+     *
+     * @param \Throwable $e The exception caught around a persist() call.
+     * @return string The (possibly translated) error message.
+     */
+    private function diagnose_write_error( \Throwable $e ): string {
+        $message = $e->getMessage();
+
+        if ( preg_match( '/ftp_\w+\(\):.*must be of type FTP\\\\Connection/', $message ) ) {
+            return 'WordPress could not write site files because WP-CLI is running as a different system user ' .
+                'than the one that owns the site files, so WP_Filesystem silently fell back to the FTP method ' .
+                'with no credentials configured instead of writing directly. Run wpx/WP-CLI as the site\'s own ' .
+                "system user instead. Original error: {$message}";
+        }
+
+        return $message;
     }
 
     /**
