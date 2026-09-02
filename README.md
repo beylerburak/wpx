@@ -199,7 +199,7 @@ internal/
   wpcli/                     transport dispatch (local exec or SSH)
   ssh/                       SSH execution
   output/                    tree, table, diff, lock formatters
-plugin/wpx/                  the WordPress plugin
+plugin/agent-control-plane-for-elementor/  the WordPress plugin
   includes/
     class-wpx-elementor-bridge.php    classic document model
     class-wpx-atomic-bridge.php       V4 document model + prop envelopes
@@ -218,7 +218,7 @@ agent-rules/                 drop-in agent instructions
 ## Requirements
 
 - Go 1.21+ to build the CLI
-- WordPress 6.4+, PHP 8.0+
+- WordPress 6.8+, PHP 8.0+
 - Elementor 3.6+ (flexbox containers); developed and tested against 4.2.4
 - WP-CLI on the target machine
 - SSH access, or a WordPress install on the same machine (`--local`)
@@ -267,10 +267,9 @@ WORDPRESS_VERSION=7.1 ELEMENTOR_VERSION=4.2.4 make test-integration-docker
 | 7.1 | 8.3 | 4.2.4 | 54 assertions | Verified end to end, including V4 atomic pages |
 
 Only combinations that have passed the full disposable integration suite are listed as verified. The stated
-minimums (WordPress 6.4, PHP 8.0, Elementor 3.6) describe the intended support floor, not yet a fully tested
-cross-product. Elementor 4.2.4 itself requires WordPress 6.8+, so it cannot test the WordPress 6.4 floor.
-CI reruns every verified row on each change; adding a row means running the same suite with the two version
-overrides above.
+minimums (WordPress 6.8, PHP 8.0, Elementor 3.6) describe the intended support floor, not yet a fully tested
+cross-product. CI reruns every verified row on each change; adding a row means running the same suite with
+the two version overrides above.
 
 ## Releases
 

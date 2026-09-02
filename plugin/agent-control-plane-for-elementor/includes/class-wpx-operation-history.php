@@ -190,6 +190,7 @@ class WPX_Operation_History {
         $operation_id = self::generate_operation_id();
         $table_name   = self::table_name();
 
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery -- WPX owns this audit table; no core CRUD API exists.
         $inserted = $wpdb->insert(
             $table_name,
             [
@@ -234,6 +235,7 @@ class WPX_Operation_History {
             $after_state = wp_json_encode( $after_state );
         }
 
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Audit status must be persisted immediately.
         $updated = $wpdb->update(
             self::table_name(),
             [
@@ -268,6 +270,7 @@ class WPX_Operation_History {
 
         self::$last_error = null;
 
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Audit status must be persisted immediately.
         $updated = $wpdb->update(
             self::table_name(),
             [
@@ -340,9 +343,11 @@ class WPX_Operation_History {
 
         $table_name = self::table_name();
 
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Operation reads must reflect the current audit state.
         $row = $wpdb->get_row(
             $wpdb->prepare(
-                "SELECT * FROM $table_name WHERE operation_id = %s",
+                'SELECT * FROM %i WHERE operation_id = %s',
+                $table_name,
                 $operation_id
             )
         );
@@ -362,9 +367,11 @@ class WPX_Operation_History {
 
         $table_name = self::table_name();
 
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Snapshots are mutable audit data and must not be stale.
         $snapshot = $wpdb->get_var(
             $wpdb->prepare(
-                "SELECT page_snapshot FROM $table_name WHERE operation_id = %s",
+                'SELECT page_snapshot FROM %i WHERE operation_id = %s',
+                $table_name,
                 $operation_id
             )
         );
@@ -389,31 +396,51 @@ class WPX_Operation_History {
         global $wpdb;
 
         $table_name = self::table_name();
-        $columns    = 'id, operation_id, command, target_type, post_id, element_id, revision_id, '
-            . 'actor, user_id, status, error_message, created_at, updated_at, undone_at';
-
-        $where  = [];
-        $values = [];
+        if ( $post_id && $status ) {
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Audit log results must be current.
+            return $wpdb->get_results(
+                $wpdb->prepare(
+                    'SELECT id, operation_id, command, target_type, post_id, element_id, revision_id, actor, user_id, status, error_message, created_at, updated_at, undone_at FROM %i WHERE post_id = %d AND status = %s ORDER BY created_at DESC LIMIT %d',
+                    $table_name,
+                    $post_id,
+                    $status,
+                    $limit
+                )
+            );
+        }
 
         if ( $post_id ) {
-            $where[]  = 'post_id = %d';
-            $values[] = $post_id;
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Audit log results must be current.
+            return $wpdb->get_results(
+                $wpdb->prepare(
+                    'SELECT id, operation_id, command, target_type, post_id, element_id, revision_id, actor, user_id, status, error_message, created_at, updated_at, undone_at FROM %i WHERE post_id = %d ORDER BY created_at DESC LIMIT %d',
+                    $table_name,
+                    $post_id,
+                    $limit
+                )
+            );
         }
 
         if ( $status ) {
-            $where[]  = 'status = %s';
-            $values[] = $status;
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Audit log results must be current.
+            return $wpdb->get_results(
+                $wpdb->prepare(
+                    'SELECT id, operation_id, command, target_type, post_id, element_id, revision_id, actor, user_id, status, error_message, created_at, updated_at, undone_at FROM %i WHERE status = %s ORDER BY created_at DESC LIMIT %d',
+                    $table_name,
+                    $status,
+                    $limit
+                )
+            );
         }
 
-        $sql = "SELECT $columns FROM $table_name";
-        if ( $where ) {
-            $sql .= ' WHERE ' . implode( ' AND ', $where );
-        }
-        $sql .= ' ORDER BY created_at DESC LIMIT %d';
-
-        $values[] = $limit;
-
-        return $wpdb->get_results( $wpdb->prepare( $sql, $values ) );
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Audit log results must be current.
+        return $wpdb->get_results(
+            $wpdb->prepare(
+                'SELECT id, operation_id, command, target_type, post_id, element_id, revision_id, actor, user_id, status, error_message, created_at, updated_at, undone_at FROM %i ORDER BY created_at DESC LIMIT %d',
+                $table_name,
+                $limit
+            )
+        );
     }
 
     /**
@@ -433,28 +460,20 @@ class WPX_Operation_History {
         $table_name = self::table_name();
 
         if ( 0 === $keep ) {
-            $deleted = $wpdb->query( "DELETE FROM $table_name" );
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Explicit maintenance of WPX's own table.
+            $deleted = $wpdb->query( $wpdb->prepare( 'DELETE FROM %i', $table_name ) );
             return false === $deleted ? 0 : (int) $deleted;
         }
 
-        $keep_ids = $wpdb->get_col(
-            $wpdb->prepare(
-                "SELECT id FROM $table_name ORDER BY created_at DESC LIMIT %d",
-                $keep
-            )
-        );
-
-        if ( empty( $keep_ids ) ) {
-            // Nothing exists yet (or fewer rows than $keep) — nothing to prune.
-            return 0;
-        }
-
-        $placeholders = implode( ', ', array_fill( 0, count( $keep_ids ), '%d' ) );
-
+        // The derived table is required by MySQL when selecting from the same
+        // table being deleted. `%i` safely quotes both identifier occurrences.
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Explicit maintenance of WPX's own table.
         $deleted = $wpdb->query(
             $wpdb->prepare(
-                "DELETE FROM $table_name WHERE id NOT IN ($placeholders)",
-                $keep_ids
+                'DELETE FROM %i WHERE id NOT IN (SELECT id FROM (SELECT id FROM %i ORDER BY created_at DESC, id DESC LIMIT %d) AS retained)',
+                $table_name,
+                $table_name,
+                $keep
             )
         );
 
@@ -472,6 +491,7 @@ class WPX_Operation_History {
 
         self::$last_error = null;
 
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Audit status must be persisted immediately.
         $updated = $wpdb->update(
             self::table_name(),
             [

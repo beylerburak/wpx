@@ -104,7 +104,7 @@ Examples:
 			// Test WPX plugin
 			if err := client.TestWPXPlugin(); err != nil {
 				fmt.Println("⚠ WPX plugin not detected. Install it for full functionality.")
-				fmt.Println("  Copy plugin/wpx/ to your WordPress plugins directory and activate it.")
+				fmt.Println("  Install and activate the Agent Control Plane for Elementor plugin.")
 			} else {
 				fmt.Println("✓ WPX plugin active")
 			}

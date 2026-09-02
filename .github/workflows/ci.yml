@@ -57,4 +57,13 @@ jobs:
       - name: Build plugin zip
         run: make package-plugin
       - name: Verify archive root
-        run: unzip -l build/wpx.zip | grep -q 'wpx/wpx.php'
+        run: unzip -l build/wpx.zip | grep -q 'agent-control-plane-for-elementor/agent-control-plane-for-elementor.php'
+
+  plugin-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run WordPress Plugin Check
+        uses: wordpress/plugin-check-action@v1
+        with:
+          build-dir: ./plugin/agent-control-plane-for-elementor

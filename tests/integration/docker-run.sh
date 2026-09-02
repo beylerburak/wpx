@@ -32,6 +32,14 @@ wp --path="$WP_ROOT" plugin install \
 
 wp --path="$WP_ROOT" plugin install /workspace/build/wpx.zip --force --activate
 
+if [[ "${RUN_PLUGIN_CHECK:-0}" == "1" ]]; then
+    wp --path="$WP_ROOT" plugin install plugin-check --activate
+    wp --path="$WP_ROOT" plugin check agent-control-plane-for-elementor \
+        --mode=new \
+        --format=json \
+        --require="$WP_ROOT/wp-content/plugins/plugin-check/cli.php"
+fi
+
 wpx connect docker --local --path "$WP_ROOT" --wp-bin /usr/local/bin/wp >/dev/null
 
 WP_ROOT="$WP_ROOT" \

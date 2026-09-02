@@ -11,7 +11,11 @@
  * @package WPX
  */
 
-if ( ! defined( 'ABSPATH' ) || ! defined( 'WP_CLI' ) ) {
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+if ( ! defined( 'WP_CLI' ) || ! WP_CLI ) {
     return;
 }
 
@@ -122,6 +126,7 @@ class WPX_CLI_Commands {
             'post_type'      => $post_type,
             'post_status'    => $status,
             'posts_per_page' => -1,
+            // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- Elementor records builder ownership in post meta.
             'meta_query'     => [
                 [
                     'key'   => '_elementor_edit_mode',

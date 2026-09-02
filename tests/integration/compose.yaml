@@ -38,6 +38,7 @@ services:
         condition: service_started
     environment:
       ELEMENTOR_VERSION: ${ELEMENTOR_VERSION:-4.2.4}
+      RUN_PLUGIN_CHECK: ${RUN_PLUGIN_CHECK:-0}
       WP_URL: http://wordpress
       WORDPRESS_DB_HOST: db
       WORDPRESS_DB_USER: wordpress

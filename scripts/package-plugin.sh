@@ -2,8 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-0.1.0}"
-PLUGIN_FILE="$ROOT_DIR/plugin/wpx/wpx.php"
+VERSION="${VERSION:-0.1.1}"
+PLUGIN_SLUG="agent-control-plane-for-elementor"
+PLUGIN_FILE="$ROOT_DIR/plugin/$PLUGIN_SLUG/$PLUGIN_SLUG.php"
 OUTPUT_DIR="$ROOT_DIR/build"
 OUTPUT_FILE="$OUTPUT_DIR/wpx.zip"
 
@@ -20,7 +21,7 @@ mkdir -p "$OUTPUT_DIR"
 rm -f "$OUTPUT_FILE"
 (
     cd "$ROOT_DIR/plugin"
-    zip -q -r "$OUTPUT_FILE" wpx \
+    zip -q -r "$OUTPUT_FILE" "$PLUGIN_SLUG" \
         -x '*.DS_Store' '*/.git/*' '*/node_modules/*' '*/vendor/*'
 )
 

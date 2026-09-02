@@ -1,23 +1,24 @@
 <?php
 /**
- * Plugin Name: WPX - Agent Control Plane
+ * Plugin Name: Agent Control Plane for Elementor
  * Plugin URI: https://github.com/beylerburak/wpx
  * Description: Agent-native CLI bridge for WordPress + Elementor. Enables AI coding agents and developers to manage WordPress sites and edit Elementor designs from the terminal.
- * Version: 0.1.0
- * Requires at least: 6.4
+ * Version: 0.1.1
+ * Requires at least: 6.8
  * Requires PHP: 8.0
+ * Requires Plugins: elementor
  * Author: Beyler Interactive
  * Author URI: https://beyler.io
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
- * Text Domain: wpx
+ * Text Domain: agent-control-plane-for-elementor
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'WPX_VERSION', '0.1.0' );
+define( 'WPX_VERSION', '0.1.1' );
 define( 'WPX_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'WPX_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 
