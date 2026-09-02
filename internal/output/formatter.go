@@ -49,13 +49,13 @@ func (s SummaryMap) Keys() []string {
 
 // TreeNode represents a node in the Elementor element tree.
 type TreeNode struct {
-	ID         string            `json:"id"`
-	Type       string            `json:"type"`
-	WidgetType string            `json:"widget_type,omitempty"`
-	Label      string            `json:"label,omitempty"`
-	Summary    SummaryMap        `json:"summary,omitempty"`
-	Depth      int               `json:"depth"`
-	Children   []TreeNode        `json:"children,omitempty"`
+	ID         string     `json:"id"`
+	Type       string     `json:"type"`
+	WidgetType string     `json:"widget_type,omitempty"`
+	Label      string     `json:"label,omitempty"`
+	Summary    SummaryMap `json:"summary,omitempty"`
+	Depth      int        `json:"depth"`
+	Children   []TreeNode `json:"children,omitempty"`
 }
 
 // PageTree represents the full page tree structure.

@@ -25,7 +25,7 @@ Get started:
   wpx connect mysite --ssh user@server --path /var/www/html
   wpx site info
   wpx elementor tree 241`,
-		Version: version,
+		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}

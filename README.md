@@ -19,9 +19,9 @@ it lands, and refused outright when it cannot be made safely.
 # 1. Build the CLI
 go install github.com/beylerburak/wpx/cmd/wpx@latest
 
-# 2. Install the plugin on the site
-#    Copy plugin/wpx/ into wp-content/plugins/, then:
-wp plugin activate wpx
+# 2. Download wpx.zip from the matching GitHub release, then either upload it
+#    in wp-admin (Plugins → Add New → Upload Plugin), or use WP-CLI:
+wp plugin install ./wpx.zip --activate
 
 # 3. Connect — remote over SSH, or a site on this machine
 wpx connect mysite --ssh user@server.com --path /var/www/html
@@ -229,6 +229,8 @@ agent-rules/                 drop-in agent instructions
 make build              # build ./build/wpx
 make test               # Go unit tests
 make test-integration   # end-to-end suite against a real WordPress
+make test-integration-docker # disposable WordPress + Elementor stack
+make package-plugin     # build ./build/wpx.zip for wp-admin
 ```
 
 The integration suite is the useful one. Every assertion in it encodes a defect that was reproduced against
@@ -243,6 +245,39 @@ pages** — point it at a scratch site, never at anything real:
 WP_ROOT=/path/to/wordpress WP_BIN=/path/to/wp make test-integration
 ```
 
+For a reproducible scratch site, install Docker and run:
+
+```bash
+make test-integration-docker
+```
+
+This starts an isolated WordPress/MariaDB stack, installs the requested Elementor version, runs the suite,
+and removes the containers and volumes afterwards. The defaults are the currently verified pair; versions
+can be overridden without editing files:
+
+```bash
+WORDPRESS_VERSION=7.1 ELEMENTOR_VERSION=4.2.4 make test-integration-docker
+```
+
+## Compatibility
+
+| WordPress | PHP | Elementor | Suite | Notes |
+|-----------|-----|-----------|-------|-------|
+| 6.8 | 8.3 | 4.2.4 | 54 assertions | Verified end to end, including V4 atomic pages |
+| 7.1 | 8.3 | 4.2.4 | 54 assertions | Verified end to end, including V4 atomic pages |
+
+Only combinations that have passed the full disposable integration suite are listed as verified. The stated
+minimums (WordPress 6.4, PHP 8.0, Elementor 3.6) describe the intended support floor, not yet a fully tested
+cross-product. Elementor 4.2.4 itself requires WordPress 6.8+, so it cannot test the WordPress 6.4 floor.
+CI reruns every verified row on each change; adding a row means running the same suite with the two version
+overrides above.
+
+## Releases
+
+Tags are the source of truth for releases. A tag such as `v0.1.0` builds versioned macOS and Linux CLI
+binaries, an installable `wpx.zip`, and SHA-256 checksums, then attaches them to a GitHub release. The plugin
+header version must match the tag, so a mismatched release fails instead of publishing inconsistent pieces.
+
 ## License
 
-GPL v2 or later, matching WordPress.
+[GPL v2 or later](LICENSE), matching WordPress.
