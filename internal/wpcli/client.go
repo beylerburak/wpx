@@ -5,6 +5,7 @@ package wpcli
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -35,11 +36,20 @@ func (c *Client) IsLocal() bool {
 
 // ExecWPCLI runs a WP-CLI command and returns stdout, stderr and any error.
 func (c *Client) ExecWPCLI(args ...string) (string, string, error) {
+	return c.ExecWPCLIStdin(os.Stdin, args...)
+}
+
+// ExecWPCLIStdin is ExecWPCLI with an explicit stdin, for the rare command
+// that needs to stream something other than the CLI process's own stdin —
+// e.g. a local file piped to `elementor-import --file=-`. Every other call
+// site keeps using ExecWPCLI, which is unchanged and still inherits
+// os.Stdin.
+func (c *Client) ExecWPCLIStdin(stdin io.Reader, args ...string) (string, string, error) {
 	if !c.IsLocal() {
 		if c.ssh == nil {
 			return "", "", fmt.Errorf("site '%s' has neither a local nor an SSH transport configured", c.site.Alias)
 		}
-		return c.ssh.ExecWPCLI(args...)
+		return c.ssh.ExecWPCLIStdin(stdin, args...)
 	}
 
 	// Local mode: exec the wp binary directly. No shell is involved, so the
@@ -51,7 +61,7 @@ func (c *Client) ExecWPCLI(args ...string) (string, string, error) {
 	wpArgs = append(wpArgs, args...)
 
 	cmd := exec.Command(c.site.Local.Binary(), wpArgs...)
-	cmd.Stdin = os.Stdin
+	cmd.Stdin = stdin
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -67,6 +77,14 @@ func (c *Client) ExecWPXCommand(subcommand string, args ...string) (string, stri
 	wpxArgs := []string{"wpx", subcommand}
 	wpxArgs = append(wpxArgs, args...)
 	return c.ExecWPCLI(wpxArgs...)
+}
+
+// ExecWPXCommandStdin is ExecWPXCommand with an explicit stdin. See
+// ExecWPCLIStdin.
+func (c *Client) ExecWPXCommandStdin(stdin io.Reader, subcommand string, args ...string) (string, string, error) {
+	wpxArgs := []string{"wpx", subcommand}
+	wpxArgs = append(wpxArgs, args...)
+	return c.ExecWPCLIStdin(stdin, wpxArgs...)
 }
 
 // TestConnection verifies the transport works and WP-CLI is reachable.

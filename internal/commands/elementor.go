@@ -1,9 +1,12 @@
 package commands
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -42,6 +45,7 @@ Workflow:
 	cmd.AddCommand(newElementorContainerCmd())
 	cmd.AddCommand(newElementorWrapCmd())
 	cmd.AddCommand(newElementorLockCmd())
+	cmd.AddCommand(newElementorImportCmd())
 
 	return cmd
 }
@@ -860,6 +864,98 @@ Examples:
 	}
 }
 
+func newElementorImportCmd() *cobra.Command {
+	var (
+		fileFlag   string
+		dryRunFlag bool
+		forceFlag  bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "import <page_id>",
+		Short: "Replace a page's entire Elementor element tree in one call",
+		Long: `Replace a page's whole element tree from a local JSON file in a single
+round trip, instead of rebuilding it element-by-element.
+
+The payload lives on this machine; the WP-CLI command runs on the configured
+site. wpx reads --file locally and streams it to the remote command's stdin,
+so no payload file is ever left on the server.
+
+Like every other write, the import is snapshotted first, so a bad import is
+just 'wpx undo' away.
+
+Examples:
+  wpx elementor import 241 --file page.json
+  cat page.json | wpx elementor import 241 --file=-
+  wpx elementor import 241 --file page.json --dry-run`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			payload, err := readElementorImportPayload(fileFlag)
+			if err != nil {
+				return err
+			}
+
+			if !json.Valid(payload) {
+				source := fileFlag
+				if source == "-" {
+					source = "stdin"
+				}
+				return fmt.Errorf("%s does not contain valid JSON", source)
+			}
+
+			client, err := getClient()
+			if err != nil {
+				return err
+			}
+
+			wpxArgs := []string{args[0], "--file=-"}
+			if dryRunFlag {
+				wpxArgs = append(wpxArgs, "--dry-run")
+			}
+			if forceFlag {
+				wpxArgs = append(wpxArgs, "--force")
+			}
+
+			stdout, stderr, err := client.ExecWPXCommandStdin(bytes.NewReader(payload), "elementor-import", wpxArgs...)
+			if err != nil {
+				return fmt.Errorf("command failed: %s\n%s", stderr, err)
+			}
+
+			return renderMutationResult(stdout, args[0], "Imported Elementor tree", dryRunFlag)
+		},
+	}
+
+	cmd.Flags().StringVar(&fileFlag, "file", "", "Local path to the Elementor JSON payload ('-' to read from this process's stdin)")
+	cmd.Flags().BoolVar(&dryRunFlag, "dry-run", false, "Preview without applying")
+	cmd.Flags().BoolVar(&forceFlag, "force", false, forceHelp)
+	_ = cmd.MarkFlagRequired("file")
+
+	return cmd
+}
+
+// readElementorImportPayload reads the local Elementor JSON payload for
+// 'elementor import': the named file, or this process's own stdin when
+// --file is '-'. Failing here — a missing file, an unreadable one, or
+// invalid JSON — catches the mistake before spending a round trip on a
+// remote command that would only reject it the same way afterward. The
+// plugin still owns every Elementor-specific validation rule; this is only
+// "is it readable JSON".
+func readElementorImportPayload(file string) ([]byte, error) {
+	if file == "-" {
+		payload, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return nil, fmt.Errorf("cannot read payload from stdin: %w", err)
+		}
+		return payload, nil
+	}
+
+	payload, err := os.ReadFile(file)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read %s: %w", file, err)
+	}
+	return payload, nil
+}
+
 // renderMutationResult prints the plugin's response to an operation that
 // creates or relocates elements (duplicate, container create, wrap) rather
 // than diffing settings on one that already exists.
@@ -914,6 +1010,38 @@ func renderMutationResult(stdout string, pageIDArg string, actionLabel string, d
 			strs[i] = fmt.Sprint(e)
 		}
 		details = append(details, output.KV{Key: "elements", Value: strings.Join(strs, ", ")})
+	}
+	// 'elementor import' replaces a whole page, so its summary is the only
+	// thing a dry run has to offer: without it the preview says nothing
+	// about what is on the way in.
+	if summary, ok := result["summary"].(map[string]interface{}); ok {
+		for _, key := range []string{"total_elements", "top_level_elements"} {
+			if v, ok := summary[key]; ok && v != nil {
+				details = append(details, output.KV{Key: key, Value: fmt.Sprint(v)})
+			}
+		}
+		if counts, ok := summary["widget_type_counts"].(map[string]interface{}); ok && len(counts) > 0 {
+			types := make([]string, 0, len(counts))
+			for name := range counts {
+				types = append(types, name)
+			}
+			sort.Strings(types)
+			parts := make([]string, len(types))
+			for i, name := range types {
+				parts[i] = fmt.Sprintf("%s×%v", name, counts[name])
+			}
+			details = append(details, output.KV{Key: "widgets", Value: strings.Join(parts, ", ")})
+		}
+	}
+	// Only 'elementor import' returns this today, but any mutation could
+	// grow non-fatal warnings (e.g. a control the target Elementor version
+	// dropped) — surface them here rather than in a one-off formatter.
+	if warnings, ok := result["warnings"].([]interface{}); ok && len(warnings) > 0 {
+		strs := make([]string, len(warnings))
+		for i, w := range warnings {
+			strs[i] = fmt.Sprint(w)
+		}
+		details = append(details, output.KV{Key: "warnings", Value: strings.Join(strs, ", ")})
 	}
 
 	fmt.Print(output.FormatMutation(parsePageID(pageIDArg, result), actionLabel, details, dryRun))

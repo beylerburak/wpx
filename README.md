@@ -133,6 +133,19 @@ wpx elementor wrap 241 f921a02 41ab203 --direction row --gap 32
 `wrap` moves a set of siblings into a new container as one operation, so a failure cannot leave the page
 half-rearranged.
 
+### Bulk import
+
+```bash
+wpx elementor import 241 --file page.json
+cat page.json | wpx elementor import 241 --file=-
+wpx elementor import 241 --file page.json --dry-run
+```
+
+Replaces a page's entire element tree from a local JSON file in one round trip, for when you're loading a
+whole page (or template) at once rather than editing elements one at a time. `--file` is read on this
+machine and streamed to the remote command's stdin, so no payload file is ever left on the server. Like
+every other write it's snapshotted first, so a bad import is just `wpx undo` away.
+
 ### Global styles
 
 ```bash

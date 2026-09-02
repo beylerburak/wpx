@@ -890,6 +890,91 @@ class WPX_CLI_Commands {
     }
 
     /**
+     * Replace a post's entire Elementor element tree in one call.
+     *
+     * For loading a whole page's worth of content at once (porting a page
+     * built elsewhere, or restoring one from an external source) without
+     * hundreds of elementor-set / elementor-add-widget round trips. Goes
+     * through the same snapshot, operation-history and editor-lock guard as
+     * every other write, so `wp wpx undo` restores the previous page exactly
+     * as it would for any other command.
+     *
+     * ## OPTIONS
+     *
+     * <post_id>
+     * : The post ID whose Elementor data will be replaced.
+     *
+     * [--file=<path>]
+     * : Path to a file containing the JSON elements array. Use `-` to read
+     * from STDIN.
+     *
+     * [--data=<json>]
+     * : The JSON elements array, inline. Exactly one of --file or --data is
+     * required.
+     *
+     * [--dry-run]
+     * : Validate and summarize without writing.
+     *
+     * [--force]
+     * : Write even if someone has the page open in the Elementor editor.
+     *
+     * ## EXAMPLES
+     *
+     *     wp wpx elementor-import 241 --file=page.json
+     *     cat page.json | wp wpx elementor-import 241 --file=-
+     *     wp wpx elementor-import 241 --data='[]' --dry-run
+     *
+     * @subcommand elementor-import
+     */
+    public function elementor_import( $args, $assoc_args ) {
+        $post_id  = (int) $args[0];
+        $has_file = isset( $assoc_args['file'] );
+        $has_data = isset( $assoc_args['data'] );
+
+        if ( $has_file === $has_data ) {
+            WP_CLI::error( 'Pass exactly one of --file or --data.' );
+            return;
+        }
+
+        if ( $has_file ) {
+            $path = (string) $assoc_args['file'];
+            $raw  = '-' === $path ? file_get_contents( 'php://stdin' ) : file_get_contents( $path );
+
+            if ( false === $raw ) {
+                WP_CLI::error( "Could not read --file '{$path}'." );
+                return;
+            }
+        } else {
+            $raw = (string) $assoc_args['data'];
+        }
+
+        $elements = json_decode( $raw, true );
+
+        if ( json_last_error() !== JSON_ERROR_NONE ) {
+            WP_CLI::error( 'Invalid JSON: ' . json_last_error_msg() );
+            return;
+        }
+
+        // json_decode(..., true) turns both `[]` and `{}` into an empty PHP
+        // array, so an empty payload is accepted either way; anything
+        // non-empty must have sequential integer keys to count as a list.
+        if ( ! is_array( $elements ) || array_values( $elements ) !== $elements ) {
+            WP_CLI::error( 'The JSON must decode to a top-level array of element nodes.' );
+            return;
+        }
+
+        $save   = new WPX_Elementor_Save();
+        $result = $save->import_elements(
+            $post_id,
+            $elements,
+            isset( $assoc_args['dry-run'] ),
+            isset( $assoc_args['force'] )
+        );
+
+        $this->emit( $result );
+    }
+
+    /**
      * Report whether a page is locked in the Elementor editor.
      *
      * ## OPTIONS

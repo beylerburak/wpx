@@ -3,6 +3,7 @@ package ssh
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -26,6 +27,17 @@ func NewClient(site *config.SiteConfig) *Client {
 //
 // Returns stdout, stderr, and any error.
 func (c *Client) ExecWPCLI(args ...string) (string, string, error) {
+	return c.ExecWPCLIStdin(os.Stdin, args...)
+}
+
+// ExecWPCLIStdin is ExecWPCLI with an explicit stdin, for the rare command
+// that needs to stream something other than the CLI process's own stdin to
+// the remote WP-CLI invocation — e.g. a local file piped to
+// `elementor-import --file=-`. Every other call site keeps using ExecWPCLI,
+// which is unchanged and still inherits os.Stdin.
+//
+// Returns stdout, stderr, and any error.
+func (c *Client) ExecWPCLIStdin(stdin io.Reader, args ...string) (string, string, error) {
 	sshConfig := c.site.SSH
 	if sshConfig == nil {
 		return "", "", fmt.Errorf("no SSH configuration for site '%s'", c.site.Alias)
@@ -39,7 +51,7 @@ func (c *Client) ExecWPCLI(args ...string) (string, string, error) {
 	sshArgs = append(sshArgs, remoteCmd)
 
 	cmd := exec.Command("ssh", sshArgs...)
-	cmd.Stdin = os.Stdin
+	cmd.Stdin = stdin
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -56,6 +68,14 @@ func (c *Client) ExecWPXCommand(subcommand string, args ...string) (string, stri
 	wpxArgs := []string{"wpx", subcommand}
 	wpxArgs = append(wpxArgs, args...)
 	return c.ExecWPCLI(wpxArgs...)
+}
+
+// ExecWPXCommandStdin is ExecWPXCommand with an explicit stdin. See
+// ExecWPCLIStdin.
+func (c *Client) ExecWPXCommandStdin(stdin io.Reader, subcommand string, args ...string) (string, string, error) {
+	wpxArgs := []string{"wpx", subcommand}
+	wpxArgs = append(wpxArgs, args...)
+	return c.ExecWPCLIStdin(stdin, wpxArgs...)
 }
 
 // TestConnection tests the SSH connection and WP-CLI availability.

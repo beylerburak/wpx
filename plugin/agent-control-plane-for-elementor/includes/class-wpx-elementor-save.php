@@ -853,6 +853,182 @@ class WPX_Elementor_Save {
     }
 
     /**
+     * Replace a post's entire Elementor element tree in one call.
+     *
+     * Meant for loading a whole page's worth of content at once — porting a
+     * page built elsewhere, or restoring one from an external source —
+     * without hundreds of set/add-widget round trips. Goes through the same
+     * guard → snapshot → apply machinery as every other write, so the result
+     * is undoable exactly like a single-element change.
+     *
+     * An empty array is a legal payload: it clears the page.
+     *
+     * @param int   $post_id  The post ID whose Elementor data will be replaced.
+     * @param array $elements The full replacement elements array (same shape as `_elementor_data`).
+     * @param bool  $dry_run  If true, validate and summarize without writing.
+     * @param bool  $force    Write even when the page is locked in the editor.
+     * @return array Result array.
+     */
+    public function import_elements(
+        int $post_id,
+        array $elements,
+        bool $dry_run = false,
+        bool $force = false
+    ): array {
+        $guard = $this->guard( $post_id, $force );
+        if ( null !== $guard ) {
+            return $guard;
+        }
+
+        $classic = $this->guard_classic_only( $post_id, 'import elements onto' );
+        if ( null !== $classic ) {
+            return $classic;
+        }
+
+        // Validation runs unconditionally, before either branch below, so a
+        // dry run refuses exactly what a real write would refuse. A dry run
+        // that reports "fine" and a real run that then refuses would be
+        // worse than no dry run at all.
+        $validation = $this->validate_import_tree( $elements );
+
+        if ( ! empty( $validation['errors'] ) ) {
+            return $this->error( 'Refusing to import: ' . implode( ' ', $validation['errors'] ) );
+        }
+
+        $message_shape = 'Would replace the element tree with %d element(s) (%d top-level).';
+
+        if ( $dry_run ) {
+            return $this->dry_run_result( [
+                'post_id'  => $post_id,
+                'warnings' => $validation['warnings'],
+                'summary'  => $validation['summary'],
+                'message'  => sprintf(
+                    $message_shape,
+                    $validation['summary']['total_elements'],
+                    $validation['summary']['top_level_elements']
+                ),
+            ] );
+        }
+
+        return $this->apply(
+            $post_id,
+            $elements,
+            [
+                'command' => "elementor import {$post_id}",
+                // The full tree is already kept as the pre-write snapshot;
+                // storing it a second time as "after" here would double the
+                // size of every import's history row for no benefit, so only
+                // the summary is kept.
+                'after'   => $validation['summary'],
+            ],
+            [
+                'warnings' => $validation['warnings'],
+                'summary'  => $validation['summary'],
+                'message'  => sprintf(
+                    'Imported %d element(s) (%d top-level).',
+                    $validation['summary']['total_elements'],
+                    $validation['summary']['top_level_elements']
+                ),
+            ]
+        );
+    }
+
+    /**
+     * Validate an incoming element tree and summarize it, without touching
+     * anything. Shared by import_elements()'s dry-run and real-write paths
+     * so both refuse identically.
+     *
+     * Errors are collected exhaustively rather than stopping at the first
+     * problem found: this replaces a whole page, so one call should tell
+     * the caller everything wrong with the payload, not just the first
+     * thing it tripped over.
+     *
+     * @param array $elements Top-level element nodes.
+     * @return array{errors:string[],warnings:string[],summary:array} Summary
+     *         has 'total_elements', 'top_level_elements' and 'widget_type_counts'.
+     */
+    private function validate_import_tree( array $elements ): array {
+        $errors             = [];
+        $warnings           = [];
+        $seen_ids           = [];
+        $duplicate_ids      = [];
+        $total              = 0;
+        $widget_counts      = [];
+
+        $walk = function ( array $nodes ) use ( &$walk, &$errors, &$seen_ids, &$duplicate_ids, &$total, &$widget_counts ) {
+            foreach ( $nodes as $index => $node ) {
+                if ( ! is_array( $node ) ) {
+                    $errors[] = "Element at position {$index} is not an object.";
+                    continue;
+                }
+
+                $total++;
+
+                $id     = $node['id'] ?? null;
+                $eltype = $node['elType'] ?? null;
+
+                if ( empty( $id ) || ! is_string( $id ) ) {
+                    $errors[] = 'An element is missing its id.';
+                } elseif ( isset( $seen_ids[ $id ] ) ) {
+                    $duplicate_ids[ $id ] = true;
+                } else {
+                    $seen_ids[ $id ] = true;
+                }
+
+                if ( empty( $eltype ) || ! is_string( $eltype ) ) {
+                    $errors[] = sprintf( "Element '%s' is missing elType.", $id ?? 'unknown' );
+                }
+
+                if ( 'widget' === $eltype ) {
+                    $widget_type = $node['widgetType'] ?? null;
+                    if ( empty( $widget_type ) || ! is_string( $widget_type ) ) {
+                        $errors[] = sprintf( "Widget element '%s' is missing widgetType.", $id ?? 'unknown' );
+                    } else {
+                        $widget_counts[ $widget_type ] = ( $widget_counts[ $widget_type ] ?? 0 ) + 1;
+                    }
+                }
+
+                if ( ! empty( $node['elements'] ) && is_array( $node['elements'] ) ) {
+                    $walk( $node['elements'] );
+                }
+            }
+        };
+
+        $walk( $elements );
+
+        if ( ! empty( $duplicate_ids ) ) {
+            $errors[] = 'Duplicate element id(s): ' . implode( ', ', array_keys( $duplicate_ids ) ) .
+                '. Every element id must be unique across the whole tree.';
+        }
+
+        // Validate every distinct widget type once, not once per occurrence,
+        // and collect every unknown type rather than stopping at the first.
+        $unknown_types = [];
+        foreach ( array_keys( $widget_counts ) as $widget_type ) {
+            $check = $this->validate_widget_type( $widget_type );
+            if ( null !== $check['error'] ) {
+                $unknown_types[] = $widget_type;
+            }
+            $warnings = array_merge( $warnings, $check['warnings'] );
+        }
+
+        if ( ! empty( $unknown_types ) ) {
+            $errors[] = 'Unknown widget type(s): ' . implode( ', ', $unknown_types ) .
+                '. They are not registered with Elementor and would be written as dead elements the editor cannot render.';
+        }
+
+        return [
+            'errors'   => $errors,
+            'warnings' => array_values( array_unique( $warnings ) ),
+            'summary'  => [
+                'total_elements'     => $total,
+                'top_level_elements' => count( $elements ),
+                'widget_type_counts' => $widget_counts,
+            ],
+        ];
+    }
+
+    /**
      * Set props on a V4 (atomic) element.
      *
      * Two things differ from the classic path. Values arrive from the CLI as
