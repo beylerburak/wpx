@@ -62,6 +62,22 @@ type SSHConfig struct {
 
 	// KeyFile is the path to the SSH private key.
 	KeyFile string `yaml:"key_file,omitempty"`
+
+	// WPBin is the path to the wp binary on the remote host. Empty means "wp" on PATH.
+	WPBin string `yaml:"wp_bin,omitempty"`
+
+	// WPEnv holds "KEY=VALUE" pairs to prefix the remote WP-CLI invocation with
+	// (via `env`). Panel hosts (Plesk/cPanel) commonly need PATH set here, since
+	// they don't put php on the default PATH and WP-CLI's shebang relies on it.
+	WPEnv []string `yaml:"wp_env,omitempty"`
+}
+
+// Binary returns the wp binary to invoke on the remote host.
+func (s *SSHConfig) Binary() string {
+	if s.WPBin != "" {
+		return s.WPBin
+	}
+	return "wp"
 }
 
 // ConfigDir returns the path to the wpx config directory (~/.wpx/).

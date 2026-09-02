@@ -32,6 +32,19 @@ wpx site info
 wpx elementor tree 241
 ```
 
+On panel hosting (Plesk/cPanel), PHP is usually not on the default PATH, which breaks WP-CLI's
+`#!/usr/bin/env php` shebang. Point `env` at the right PATH with `--wp-env`, and use `--ssh siteuser@host`
+rather than root — running as root makes `WP_Filesystem` fall back to FTP, and Elementor's CSS regeneration
+fails as a result:
+
+```bash
+wpx connect mysite --ssh siteuser@host --path /var/www/vhosts/site/httpdocs \
+  --wp-env PATH=/opt/plesk/php/8.4/bin:/usr/local/bin:/usr/bin
+```
+
+`--wp-bin` (works for both `--ssh` and `--local`) points at a specific `wp` binary instead of relying on
+PATH; `--wp-env KEY=VALUE` is repeatable and only valid with `--ssh`.
+
 ## Architecture
 
 ```

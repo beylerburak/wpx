@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -18,6 +19,7 @@ func newConnectCmd() *cobra.Command {
 		portFlag  int
 		localFlag bool
 		wpBinFlag string
+		wpEnvFlag []string
 	)
 
 	cmd := &cobra.Command{
@@ -47,6 +49,13 @@ Examples:
 				return fmt.Errorf("one of --ssh or --local is required\nUsage: wpx connect <alias> --ssh user@host[:port] [--path /var/www/html]\n       wpx connect <alias> --local --path /path/to/wordpress")
 			}
 
+			if localFlag && len(wpEnvFlag) > 0 {
+				return fmt.Errorf("--wp-env is only valid with --ssh")
+			}
+			if err := validateWPEnv(wpEnvFlag); err != nil {
+				return err
+			}
+
 			var sshConfig *config.SSHConfig
 			if !localFlag {
 				parsed, err := parseSSHString(sshFlag)
@@ -56,6 +65,8 @@ Examples:
 				if portFlag > 0 {
 					parsed.Port = portFlag
 				}
+				parsed.WPBin = wpBinFlag
+				parsed.WPEnv = wpEnvFlag
 				sshConfig = parsed
 			}
 
@@ -133,9 +144,29 @@ Examples:
 	cmd.Flags().StringVar(&pathFlag, "path", "", "WordPress installation path on server")
 	cmd.Flags().IntVar(&portFlag, "port", 0, "SSH port (overrides port in --ssh)")
 	cmd.Flags().BoolVar(&localFlag, "local", false, "Site runs on this machine; run WP-CLI directly instead of over SSH")
-	cmd.Flags().StringVar(&wpBinFlag, "wp-bin", "", "Path to the wp binary for --local (default: wp on PATH)")
+	cmd.Flags().StringVar(&wpBinFlag, "wp-bin", "", "Path to the wp binary for --local or --ssh (default: wp on PATH)")
+	cmd.Flags().StringArrayVar(&wpEnvFlag, "wp-env", nil, "KEY=VALUE environment variable for the remote WP-CLI invocation (--ssh only, repeatable)")
 
 	return cmd
+}
+
+// wpEnvKeyPattern matches a valid environment variable name.
+var wpEnvKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// validateWPEnv checks that every --wp-env value has the form KEY=VALUE with a
+// well-formed KEY, so a typo surfaces at connect time rather than as a cryptic
+// remote shell error.
+func validateWPEnv(pairs []string) error {
+	for _, p := range pairs {
+		idx := strings.Index(p, "=")
+		if idx <= 0 {
+			return fmt.Errorf("invalid --wp-env %q: expected KEY=VALUE", p)
+		}
+		if !wpEnvKeyPattern.MatchString(p[:idx]) {
+			return fmt.Errorf("invalid --wp-env %q: key must be a valid environment variable name", p)
+		}
+	}
+	return nil
 }
 
 // parseSSHString parses "user@host:port" into an SSHConfig.

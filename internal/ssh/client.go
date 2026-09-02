@@ -31,15 +31,8 @@ func (c *Client) ExecWPCLI(args ...string) (string, string, error) {
 		return "", "", fmt.Errorf("no SSH configuration for site '%s'", c.site.Alias)
 	}
 
-	// Build the WP-CLI command
-	wpArgs := []string{"wp"}
-	if c.site.WPPath != "" {
-		wpArgs = append(wpArgs, "--path="+c.site.WPPath)
-	}
-	wpArgs = append(wpArgs, args...)
-
 	// Build the remote command string
-	remoteCmd := shellJoin(wpArgs)
+	remoteCmd := remoteWPCLICommand(sshConfig, c.site.WPPath, args)
 
 	// Build the SSH command
 	sshArgs := c.buildSSHArgs()
@@ -130,6 +123,27 @@ func (c *Client) buildSSHArgs() []string {
 	args = append(args, target)
 
 	return args
+}
+
+// remoteWPCLICommand builds the shell-quoted WP-CLI command to run on the
+// remote host. Panel hosts (Plesk/cPanel) often have no php on the default
+// PATH, which breaks WP-CLI's `#!/usr/bin/env php` shebang; WPEnv lets the
+// caller patch the remote environment (typically PATH) so `env` can find php
+// before wp runs. Both WPBin and WPEnv default to zero values, so an unset
+// SSHConfig produces the exact same command it always has.
+func remoteWPCLICommand(sshConfig *config.SSHConfig, wpPath string, args []string) string {
+	wpArgs := []string{}
+	if len(sshConfig.WPEnv) > 0 {
+		wpArgs = append(wpArgs, "env")
+		wpArgs = append(wpArgs, sshConfig.WPEnv...)
+	}
+	wpArgs = append(wpArgs, sshConfig.Binary())
+	if wpPath != "" {
+		wpArgs = append(wpArgs, "--path="+wpPath)
+	}
+	wpArgs = append(wpArgs, args...)
+
+	return shellJoin(wpArgs)
 }
 
 // shellJoin safely joins command arguments for shell execution.
